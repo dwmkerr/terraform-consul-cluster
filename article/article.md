@@ -133,7 +133,7 @@ That's it for the network, we now have the following structure:
 
 ![](/content/images/2017/01/img-1-network-1.png)
 
-Now we need to look at creating the hosts to install Consul on.
+If you want to see the code as it stands now, check the [Step 1](https://github.com/dwmkerr/terraform-consul-cluster/tree/step-1) branch. Now we need to look at creating the hosts to install Consul on.
 
 ## Step 2 - Creating the Consul Hosts
 
