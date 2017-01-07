@@ -137,32 +137,156 @@ If you want to see the code as it stands now, check the [Step 1](https://github.
 
 ## Step 2 - Creating the Consul Hosts
 
-Consul is designed to work in a cluster, to support high-availability. Three is a good number, five is probably overkill for many scenarios, but that's what we'll go for. Now as we want resilience, we want to make sure that if a host dies (for example, due to failure of a network controller or hard disk) we automatically create a new one. Enter [Auto-Scaling Groups](TOD). Auto-scaling groups allow us to define a template for an instance, and ask AWS to make sure there are always a certain number of the instances. We can go further and make this dynamic, making the number higher if we have greater load, or lower during quiet hours, but for now we can simple say 'Ensure we always have 5 instances':
+The Consul documentation recommends running in a cluster or 3 or 5 nodes[^7]. We want to set up a system which is self-healing - if we lose a node, we want to create a new one.
+
+Enter [Auto-Scaling Groups](http://docs.aws.amazon.com/autoscaling/latest/userguide/AutoScalingGroup.html). Auto-scaling groups allow us to define a template for an instance, and ask AWS to make sure there are always a certain number of the instances. If we lose an instance, a new one will be created to keep the group at the correct size[^8].
+
+So we now need to create:
+
+1. A 'Launch Configuration' which determines what instances our Auto-scaling Group creates
+2. A 'user data script' which runs on newly created instances, which must install and start Consul
+3. An Auto-scaling group, configured to run five instances across the two public subnets
+4. A load balancer, configured to pass incoming requests for the Consul Admin console to the nodes
+
+Or visually:
+
+![Basic Cluster Diagram](/content/images/2017/01/img-5-cluster-basic.png)
+
+Let's get to it.
+
+### The Launch Configuration
+
+The Launch Configuration will define the characteristics of the instances created by the auto-scaling group:
 
 ```
-TODO
+//  Launch configuration for the consul cluster auto-scaling group.
+resource "aws_launch_configuration" "consul-cluster-lc" {
+    name_prefix = "consul-node-"
+    image_id = "${lookup(var.ami_ecs_optimised, var.region)}"
+    instance_type = "t2.micro"
+    security_groups = ["${aws_security_group.consul-cluster-vpc.id}"]
+    lifecycle {
+        create_before_destroy = true
+    }
+}
+
+//  Auto-scaling group for our cluster.
+resource "aws_autoscaling_group" "consul-cluster-asg" {
+    name = "consul-asg"
+    launch_configuration = "${aws_launch_configuration.consul-cluster-lc.name}"
+    min_size = 5
+    max_size = 5
+    vpc_zone_identifier = ["${aws_subnet.public-a.id}", "${aws_subnet.public-b.id}"]
+    lifecycle {
+        create_before_destroy = true
+    }
+}
 ```
 
-So things are a bit more complex now. We have:
+A few key things to note:
 
-- An auto-scaling group, which demands we have a minimum and maximum of five instances
-- A launch configuration, which tells the auto-scaling group what a newly created host should look like
-- A 'setup' script, which runs on each newly created instance, and starts the consul service
-- A load balancer, which monitors whether the admin UI is available on each instance
+1. I have omitted the `tag` properties in the scripts for brevity
+2. The 'image' for the launch configuration is looked up based on the region we've specified - we're using an image with Docker installed[^9]
+3. We are using micro instances, which are free-tier eligible
+4. The auto-scaling group spans both availability zones.
 
-The load balancer include a heath check. If the host doesn't return an HTTP 200 for the admin UI 5 times in a row, with a gap of 30 seconds between each check, it will be marked as unhealthy and then destroyed. The auto scaling group will see we have too few hosts and create a new one, following the launch configuration.
+Once we run `terraform apply`, we'll see our auto-scaling group, which references the new launch configuration and works over multiple availability zones:
 
-As an added bonus, the load balancer takes in request on HTTP 80 and passes them to the admin UI port and address. If we run `terraform apply`, we'll see the IP address of the load balancer:
+![Auto scaling group and launch configuration](/content/images/2017/01/img-6-lc-asg.png)
+
+We can also see the new instances:
+
+![Instances](/content/images/2017/01/img-7-instances.png)
+
+These instances don't do much yet though - they've got Docker pre-installed but no Consul.
+
+### Installing Consul and Accessing the Admin Interface
+
+A 'user data' script is a script which runs once when a newly created host is started in an auto-scaling group. We can create a script in our repo, and reference it in our Terraform script. We add a new file called `user-data.sh` to a `scripts` folder, which installs Consul:
+
+```bash
+# Get my IP address.
+IP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
+echo "Instance IP is: $IP"
+
+# Start the Consul server.
+docker run -d --net=host \
+    --name=consul \
+    consul agent -server -ui \
+    -bind="$IP" \
+    -client="0.0.0.0" \
+    -bootstrap-expect="1"
+```
+
+Here's a breakdown of what we're doing:
+
+1. Get our IP address. AWS provide a magic IP address which lets you query data about your instance, see [Instance Metadata & User Metadata](http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html)
+2. Start the Consul docker image in admin mode, with the UI enabled, expecting only one instance
+
+**The actual scripts contains more!** Getting userdata scripts right, testing and debugging them is tricky. See how I do it in detail in [Appendix 1: Logging](#Appendix-1-Logging). 
+
+Now we need to tell Terraform to include this script as part of the instance metadata. Here's how we do that:
+
+```
+resource "aws_launch_configuration" "consul-cluster-lc" {
+    /// ...add the line below....
+    user_data = "${file("files/consul-node.sh")}"
+}
+```
+
+When Consul is running with the `-ui` option, it provides an admin UI. You can try it by running Consul locally with `docker run -p8500:8500 consul` and navigating to http://localhost:8500/ui.
+
+We can install a load balancer in front of our auto-scaling group, to automatically forward incoming traffic to a host. Here's the config:
+
+```
+resource "aws_elb" "consul-lb-a" {
+    name = "consul-lb-a"
+    security_groups = ["${aws_security_group.consul-cluster-vpc.id}", "${aws_security_group.web.id}"]
+    subnets = ["${aws_subnet.public-a.id}"]
+    listener {
+        instance_port = 8500
+        instance_protocol = "http"
+        lb_port = 80
+        lb_protocol = "http"
+    }
+    health_check {
+        healthy_threshold = 2
+        unhealthy_threshold = 2
+        timeout = 3
+        target = "HTTP:8500/ui/"
+        interval = 30
+    }
+}
+```
+
+Blow-by-blow:
+
+1. Create a load balancer, with the same security groups as the rest of the VPC, but also a security group which allows web access
+2. Point to two subnets first subnet
+3. Forward HTTP 8500 traffic
+4. Configure a healthcheck[^12]
+
+The final change we make is to add an `outputs.tf` file, which lists all of the properties Terraform knows about which we want to save. All it includes is:
+
+```
+output "consul-dns" {
+    value = "${aws_elb.consul-lb.dns_name}"
+}
+```
+
+When we finally run `terraform apply`, we see the public DNS of our load balancer:
+
+![Screenshot showing 'terraform apply' output, indicating our newly generated ELB's public DNS](/content/images/2017/01/img-8-cluster-dns.png)
+
+And running in a browser on port 8500 we see the Consul admin interface:
+
+![Screenshot showing the Consul admin interface]()
+
+Every time we refresh we will likely see a different node. In fact, what we have created is five homogenous clusters each containing one node:
 
 TODO
 
-If we open it, we see our admin UI:
-
-But we are only seeing one host. If we refresh again and again, we'll see different hosts each time, but they're not aware of each other:
-
-TODO screenshot
-
-This is because the hosts don't know about each other. When starting the Consul service, we need to provide a 'leader' IP - this is the instance each node in the cluster will talk to to establish a Consul cluster. This is the next part of the challenge.
+What we need to do now is *connect* the nodes together.
 
 ## Step 3 - Determining a Leader
 
@@ -241,6 +365,23 @@ If you find this article, please do let me know. Any questions or comments are w
 
 ---
 
+## Appendix 1: Logging
+
+I would not normally create a userdata script expect everything to work, there's too much that can go wrong. I actually set up the server like this is:
+
+1. Draft a script on my local machine which configures script logging and CloudWatch[^13]
+2. Spin up a new EC2 instance manually
+3. SSH onto the instance, and run the script line by line until I'm sure it's right
+
+This'll often take a few attempts, particularly to get security groups right (which will require recreating the instance). I've deliberately omitted the code which relates to CloudWatch and logging setup as it is purely for admin diagnostics and doesn't contribute to the main topic. If you want more details, let me know, or just check the code.
+
+TODO relevant lines:
+- a
+- b
+- c
+
+---
+
 [^1]: This kind of pattern is critical in the world of microservices, where many small services will be running on a cluster. Services may die, due to errors or failing hosts, and be recreated on new hosts. Their IPs and ports may be ephemeral.It is essential that the system as a whole has a registry of where each service lives and how to access it. Such a registry must be *resilient*, as it is an essential part of the system.
 
 [^2]: Most popular is a fairly loose term.  https://www.gartner.com/doc/reprints?id=1-2G2O5FC&ct=150519&st=sb and 
@@ -252,3 +393,13 @@ If you find this article, please do let me know. Any questions or comments are w
 [^5]: For more expert readers that may sound horribly patronising, I don't mean it to be. For many less experienced technologists the basics of networking could be more unfamiliar!
 
 [^6]: A subnet cannot span availability zones, so we need one for each.
+
+[^7]: See https://www.consul.io/docs/internals/consensus.html.
+
+[^8]: A common pattern is to actually make the group size dynamic, responding to events. For example, we could have a group of servers which increases in size if the average CPU load of the hosts stays above 80% for five minutes, and scales down if it goes below 10% for ten minutes. This is more common for app and web servers and not needed for our system.
+
+[^9]: Specifically, this is the AMI for the Amazon ECS EC2 instance. This is normally used for instances which run in ECS clusters, but as it has Docker preinstalled and running, it saves us having to install it ourselves.
+
+[^12]: Check the admin UI every 30 seconds, more than 3 seconds indicates a timeout and failure. Two failures in a row means an unhealthy host, which will be destroyed, two successes in a row for a new host means healthy, which means it will receive traffic.
+
+[^13]: Amazon's service for managing and aggregating logs
