@@ -20,9 +20,8 @@ In a nutshell:
 
 - We have a set of homogenous Consul nodes
 - The nodes form a cluster and automatically elect a leader
-- The nodes are essentially homogenous, we do not need to create a leader node or follower node, nodes handle this at runtime
 - The nodes span more than one availability zone, meaning the system is redudant and can survive the failure of an entire availability zone (i.e. data centre)
-- The Consul administrive interface is available to view via a gateway
+- The Consul UI is available to view via a gateway
 - We have two example microservices which register themselves on the cluster, so we can actually see some registered services in the console
 
 As a quick caveat, in reality this setup would typically live in a private subnet, not directly accessible to the outside work except via public facing load balancers. This adds a bit more complexity to the Terraform setup but not much value to the walkthough. A network diagram of how it might look is below, I invite interested readers to try and move to this model as a great exercise to cement the concepts!
@@ -487,19 +486,56 @@ If you are familiar with Consul, this may be all you need. If not, you might be 
 
 ## Step 4 - Adding a Microservice
 
-I've created a docker image for as simple a microservice as you can get. It returns a quote from Futurama's Zapp Brannigan:
+I've created a docker image for as simple a microservice as you can get. It returns a quote from Futurama's Zapp Brannigan. The image is tagged as `dwmkerr/zapp-service`.
 
-TODO
+On a new EC2 instance, running in either subnet, with the same roles as the Consul nodes, we run the following commands:
 
-We can run two or three separate instances of this in the public subnet to simulate having some 'real' microservices. We use the [registrator]() tool to tell them to register with our Consul cluster.
+```
+# Install Docker
+sudo su
+yum update -y aws-cli docker
 
-The terraform script is quite simple and lives at `./infrastructure/sample-microservices.tf`.
+# Get my IP and the IP of any node in the server cluster.
+IP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
+NODE_ID=$(aws --region="ap-southeast-1" autoscaling describe-auto-scaling-groups --auto-scaling-group-name "consul-asg" \
+    | grep InstanceId \
+    | cut -d '"' -f4 \
+    | head -1)
+NODE_IP=$(aws --region="ap-southeast-1" ec2 describe-instances \
+    --query="Reservations[].Instances[].[PrivateIpAddress]" \
+    --output="text" \
+    --instance-ids="$NODE_ID")
 
-Now when we run `terraform apply` and navigate to our Consul interface, we can see our services.
+# Run the consul agent.
+docker run -d --net=host -e 'CONSUL_LOCAL_CONFIG={"leave_on_terminate": true}' \
+  consul agent \
+  -bind="$IP" \
+  -join=$NODE_IP
 
-TODO
+# Run registrator - any Docker images will then be auto registered.
+docker run -d \
+    --name=registrator \
+    --net=host \
+    --volume=/var/run/docker.sock:/tmp/docker.sock \
+    gliderlabs/registrator:latest \
+      consul://localhost:8500
 
-Looking good - it seems we have a working cluster. But how resilient is it?
+# Run the example microservice - registrator will take care of letting consul know.
+docker run -d -p 5000:5000 dwmkerr/zapp-service
+```
+
+What's going on here?
+
+1. We grab our own IP address and the IP address of the first instance we find in the server cluster, using the same tricks as before
+2. We run the Consul agent - telling it the IP to use to join the cluster
+3. We run [Registrator](https://github.com/gliderlabs/registrator), a handy utility which will automatically register any new services we run to Consul
+4. We run a goofy sample microservice (which registrator will register for us)
+
+Now we can check the Consul UI:
+
+![The Consul UI showing a new service](/content/images/2017/01/img-15-sample-service.png)
+
+And there we have it. Our new node joins the cluster (as a client), we can register a new service and discover it later.
 
 ## Step 5 - Spanner Throwing
 
