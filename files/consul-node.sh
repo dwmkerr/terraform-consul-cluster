@@ -4,6 +4,9 @@
 set -x
 exec > /var/log/user-data.log 2>&1
 
+# TODO: actually, userdata scripts run as root, so we can get
+# rid of the sudo and tee...
+
 # Update the packages, install CloudWatch tools.
 sudo yum update -y
 sudo yum install -y awslogs
@@ -21,7 +24,7 @@ cat <<- EOF | sudo tee /etc/awslogs/config/docker.conf
 	[/var/log/docker]
 	file = /var/log/docker
 	log_group_name = /var/log/docker
-	log_stream_name = {container_instance_id}
+	log_stream_name = {instance_id}
 	datetime_format = %Y-%m-%dT%H:%M:%S.%f
 EOF
 
@@ -30,14 +33,54 @@ EOF
 sudo service awslogs start
 sudo chkconfig awslogs on
 
-# Get my IP address.
+# Install the AWS CLI.
+yum install -y aws-cli
+
+# A few variables we will refer to later...
+ASG_NAME=consul-asg
+REGION=ap-southeast-1
+EXPECTED_SIZE=5
+
+# Install the AWS CLI.
+yum install -y aws-cli
+
+# Return the id of each instance in the cluster.
+function cluster-instance-ids {
+    # Grab every line which contains 'InstanceId', cut on double quotes and grab the ID:
+    #    "InstanceId": "i-example123"
+    #....^..........^..^.....#4.....^...
+    aws --region="$REGION" autoscaling describe-auto-scaling-groups --auto-scaling-group-name $ASG_NAME \
+        | grep InstanceId \
+        | cut -d '"' -f4
+}
+
+# Return the private IP of each instance in the cluster.
+function cluster-ips {
+    for id in $(cluster-instance-ids)
+    do
+        aws --region="$REGION" ec2 describe-instances \
+            --query="Reservations[].Instances[].[PrivateIpAddress]" \
+            --output="text" \
+            --instance-ids="$id"
+    done
+}
+
+# Wait until we have as many cluster instances as we are expecting.
+while COUNT=$(cluster-instance-ids | wc -l) && [ "$COUNT" -lt "$EXPECTED_SIZE" ]
+do
+    echo "$COUNT instances in the cluster, waiting for $EXPECTED_SIZE instances to warm up..."
+    sleep 1
+done 
+
+# Get my IP address and the initial leader IP address.
 IP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
-echo "Instance IP is: $IP"
+LEADER_IP=$(cluster-ips | sort | head -1)
+echo "Instance IP is: $IP, Initial Leader IP is: $LEADER_IP"
 
 # Start the Consul server.
 docker run -d --net=host \
     --name=consul \
     consul agent -server -ui \
-    -bind="$IP" \
+    -bind="$IP" -retry-join="$LEADER_IP" \
     -client="0.0.0.0" \
-    -bootstrap-expect="1"
+    -bootstrap-expect="$EXPECTED_SIZE"

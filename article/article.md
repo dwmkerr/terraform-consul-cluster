@@ -280,51 +280,218 @@ When we finally run `terraform apply`, we see the public DNS of our load balance
 
 And running in a browser on port 8500 we see the Consul admin interface:
 
-![Screenshot showing the Consul admin interface]()
+![Screenshot showing the Consul admin interface](/content/images/2017/01/img-9-admin-ui.png)
 
-Every time we refresh we will likely see a different node. In fact, what we have created is five homogenous clusters each containing one node:
+Every time we refresh we will likely see a different node. We've actually created five clusters each of one node - what we now need to do is connect them all together into a single cluster of five nodes.
 
-TODO
+If you want to see the code as it stands now, check the [Step 2](https://github.com/dwmkerr/terraform-consul-cluster/tree/step-2) branch.
 
-What we need to do now is *connect* the nodes together.
+## Step 3 - Creating the Cluster
 
-## Step 3 - Determining a Leader
+Creating the cluster is now not too much of a challenge. We will update the userdata script to tell the consul process we are expecting 5 nodes (via the [`bootstrap-expect`](https://www.consul.io/docs/agent/options.html#_bootstrap_expect) flag.
+
+Here's the updated script:
+
+```
+# Get my IP address.
+IP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
+echo "Instance IP is: $IP"
+
+# Start the Consul server.
+docker run -d --net=host \
+    --name=consul \
+    consul agent -server -ui \
+    -bind="$IP" \
+    -client="0.0.0.0" \
+    -bootstrap-expect="5"
+```
+
+The problem is **this won't work**... We need to tell each node the address of *another* server in the cluster. For example, if we start five nodes, we should tell nodes 2-5 the address of node 1, so that the nodes can discover each other:
+
+![Diagram showing five nodes starting, all joining node 1](/content/images/2017/01/img-11-join-cluster.png)
+
+Every time a new node joins node 1, it will get its IP and broadcast it to the nodes which have originally joined.
+
+The challenge is how do we get the IP of node 1? The IP addresses are determined by the network, we don't preset them so cannot hard code them. Also, we can expect nodes to occasionally die and get recreated, so the IP addresses of nodes will in fact change over time.
+
+### Getting the IP addresses of nodes in the cluster
 
 There's a nice trick we can use here. We can ask AWS to give us the IP addresses of each host in the auto-scaling group. We then pick an arbitrary IP address to be the leader. Each node needs to pick the *same* leader. A trivial way to do this is simply pick the lowest IP address of the set:
 
-TODO diagram of election
+![Diagram showing how we decide on a leader IP](/content/images/2017/01/img-12-choose-leader.png)
 
-Once this happens, the Consul nodes all know about each other. If the leader dies, the remaining nodes will elect a new leader. If we add a new node, it'll assume the leader is the lowest IP address. This won't always be the case, but that doesn't matter, because the node it talks to will know who the *real* leader is and handle the joining process for the new node.
+There are a couple of things we need to do to get this right. First, update the userdata script to pick the leader IP, then update the **role** of our nodes so that they have permissions to use the APIs we're going to call.
 
-**IMPORTANT NOTE**
+### Picking a leader IP
 
-This sounds simple and workabble. However, cluster management and leader election is an *exceptionally* tricky thing to get right and handle every edge case. See [TODO](). I believe this approach is robust, but cannot guarantee it covers every use case. YMMV.
-
-The key changes are in the bash script to set up a clean node:
-
-```bash
-TODO
-```
-
-However, given that we use some AWS services here, we actually need to update our security policies, to allow the nodes to query the information they need to, such as the auto-scaling group instances. This means our [consul.tf](TODO) file gets a little more complex.
-
-Let's destroy the stack and build it up again:
+This is actually fairly straightforward. We update our userdata script to the below:
 
 ```
-terraform apply
+# Start the awslogs service, also start on reboot.
+# Note: Errors go to /var/log/awslogs.log
+sudo service awslogs start
+sudo chkconfig awslogs on
+
+# Install the AWS CLI.
+yum install -y aws-cli
+
+# A few variables we will refer to later...
+ASG_NAME=consul-asg
+REGION=ap-southeast-1
+EXPECTED_SIZE=5
+
+# Install the AWS CLI.
+yum install -y aws-cli
+
+# Return the id of each instance in the cluster.
+function cluster-instance-ids {
+    # Grab every line which contains 'InstanceId', cut on double quotes and grab the ID:
+    #    "InstanceId": "i-example123"
+    #....^..........^..^.....#4.....^...
+    aws --region="$REGION" autoscaling describe-auto-scaling-groups --auto-scaling-group-name $ASG_NAME \
+        | grep InstanceId \
+        | cut -d '"' -f4
+}
+
+# Return the private IP of each instance in the cluster.
+function cluster-ips {
+    for id in $(cluster-instance-ids)
+    do
+        aws --region="$REGION" ec2 describe-instances \
+            --query="Reservations[].Instances[].[PrivateIpAddress]" \
+            --output="text" \
+            --instance-ids="$id"
+    done
+}
+
+# Wait until we have as many cluster instances as we are expecting.
+while COUNT=$(cluster-instance-ids | wc -l) && [ "$COUNT" -lt "$EXPECTED_SIZE" ]
+do
+    echo "$COUNT instances in the cluster, waiting for $EXPECTED_SIZE instances to warm up..."
+    sleep 1
+done 
+
+# Get my IP address and the initial leader IP address.
+IP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
+LEADER_IP=$(cluster-ips | sort | head -1)
+echo "Instance IP is: $IP, Initial Leader IP is: $LEADER_IP"
+
+# Start the Consul server.
+docker run -d --net=host \
+    --name=consul \
+    consul agent -server -ui \
+    -bind="$IP" -retry-join="$LEADER_IP" \
+    -client="0.0.0.0" \
+    -bootstrap-expect="$EXPECTED_SIZE"
 ```
 
-Now when we hit the load balancer, we should see a cluster of five nodes:
+Right, here's what's going on:
+
+1. We create a few variables we'll use repeatedly
+2. We create a `cluster-instance-ids` function which returns the ID of each instance in the auto-scaling group
+3. We create a `cluster-ips` function which returns the private IP address of each instance in the cluster.
+4. We wait until the auto-scaling group has our expected number of instances (it can take a while for them all to be created)
+5. We get the 5 IP addresses and arbitrarily pick the lowest one as the leader
+6. We start the Consul agent in server mode, expecting 5 nodes and offering the leader IP
+
+What is is important is that each instance will use the *same* leader IP to join the cluster[^14].
+
+The problem is, if we try to run the script we will fail, because calling the AWS APIs requires some permissions we don't have. Let's fix that.
+
+### Creating a Role for our nodes
+
+Our nodes now have a few special requirements. They need to be able to query the details of an auto-scaling group and get the IP of an instance[^15].
+
+We will need to create a policy which describes the permissions we need, create a role, attach the policy to the role and then ensure our instances are assigned the correct role. This is `consul-node-role.tf` file:
+
+```
+//  This policy allows an instance to discover a consul cluster leader.
+resource "aws_iam_policy" "leader-discovery" {
+    name = "consul-node-leader-discovery"
+    path = "/"
+    description = "This policy allows a consul server to discover a consul leader by examining the instances in a consul cluster Auto-Scaling group. It needs to describe the instances in the auto scaling group, then check the IPs of the instances."
+    policy = <<EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "Stmt1468377974000",
+            "Effect": "Allow",
+            "Action": [
+                "autoscaling:DescribeAutoScalingInstances",
+                "autoscaling:DescribeAutoScalingGroups",
+                "ec2:DescribeInstances"
+            ],
+            "Resource": [
+                "*"
+            ]
+        }
+    ]
+}
+    EOF
+}
+
+//  Create a role which consul instances will assume.
+//  This role has a policy saying it can be assumed by ec2
+//  instances.
+resource "aws_iam_role" "consul-instance-role" {
+    name = "consul-instance-role"
+    assume_role_policy = <<EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Action": "sts:AssumeRole",
+            "Principal": {
+                "Service": "ec2.amazonaws.com"
+            },
+            "Effect": "Allow",
+            "Sid": ""
+        }
+    ]
+}
+EOF
+}
+
+//  Attach the policy to the role.
+resource "aws_iam_policy_attachment" "consul-instance-leader-discovery" {
+    name = "consul-instance-leader-discovery"
+    roles = ["${aws_iam_role.consul-instance-role.name}"]
+    policy_arn = "${aws_iam_policy.leader-discovery.arn}"
+}
+
+//  Create a instance profile for the role.
+resource "aws_iam_instance_profile" "consul-instance-profile" {
+    name = "consul-instance-profile"
+    roles = ["${aws_iam_role.consul-instance-role.name}"]
+}
+```
+
+Terraform is a little verbose here! Finally, we update our launch configuration to ensure that the instances assume this role.
+
+```
+resource "aws_launch_configuration" "consul-cluster-lc" {
+    // Add this line!!
+    iam_instance_profile = "${aws_iam_instance_profile.consul-instance-profile.id}"
+    }
+}
+```
+
+Let's create the cluster again, with `terraform apply`. When we log into the UI we should now see a cluster containing all five nodes:
+
+![Screenshot of the Consul UI, showing that the Consul server is running on five nodes in the Datacenter](/content/images/2017/01/img-13-cluster.png)
+
+This code is all in the [Step 3](https://github.com/dwmkerr/terraform-consul-cluster/tree/step-3) branch.
+
+If you are familiar with Consul, this may be all you need. If not, you might be interested in seeing how we actually create a new instance to host a service, register it with Consul and query its address.
+
+## Step 4 - Adding a Microservice
+
+I've created a docker image for as simple a microservice as you can get. It returns a quote from Futurama's Zapp Brannigan:
 
 TODO
 
-## Step 4 - Adding some sample microservices
-
-I've created a docker image for as simple a microservice as you can get. It returns a quote from Futuram's Zapp Brannigan:
-
-TODO
-
-We can run two or three separate instnaces of this in the public subnet to simulate having some 'real' microservices. We use the [registrator]() tool to tell them to register with our Consul cluster.
+We can run two or three separate instances of this in the public subnet to simulate having some 'real' microservices. We use the [registrator]() tool to tell them to register with our Consul cluster.
 
 The terraform script is quite simple and lives at `./infrastructure/sample-microservices.tf`.
 
@@ -403,3 +570,23 @@ TODO relevant lines:
 [^12]: Check the admin UI every 30 seconds, more than 3 seconds indicates a timeout and failure. Two failures in a row means an unhealthy host, which will be destroyed, two successes in a row for a new host means healthy, which means it will receive traffic.
 
 [^13]: Amazon's service for managing and aggregating logs
+
+[^14]: There's actually an even better way, we can provide *each* IP address to each node, by providing additional `-join` flags. I'll leave this as something you can investigate yourself.
+
+[^15]: In fact, we actually have more permissions required, because in the 'real' code we also have logs forwarded to CloudWatch. See [here](TODO) for the details.
+
+---
+
+---
+
+Further Reading:
+
+1. [Consul - Consensus Protocol](https://www.consul.io/docs/internals/consensus.html)
+2. [What you have to know about Consul and how to beat the outage problem](https://sitano.github.io/2015/10/06/abt-consul-outage/), John Koepi
+
+
+
+Notes:
+
+- Quorum is 3, losing quorum requires manual intervention (i.e. alarm)
+- 
