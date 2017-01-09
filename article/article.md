@@ -1,5 +1,7 @@
 In this article I'm going to show you how to create a resilient Consul cluster, using Terraform and AWS. We can use this cluster for microservice discovery and management. No prior knowledge of the technologies or patterns is required!
 
+The final code is at [github.com/dwmkerr/terraform-consul-cluster](https://github.com/dwmkerr/terraform-consul-cluster).
+
 ## Consul, Terraform & AWS
 
 [Consul](https://www.consul.io/) is a technology which enables *Service Discovery*[^1], a pattern which allows services to locate each other via a central authority.
@@ -14,17 +16,17 @@ A lot of what we will learn is not really AWS specific - and the Infrastructure 
 
 The goal is to create a system like this:
 
-TODO - system diagram
+![Overall System Diagram](/content/images/2017/01/img-0-goal.png)
 
 In a nutshell:
 
 - We have a set of homogenous Consul nodes
 - The nodes form a cluster and automatically elect a leader
-- The nodes span more than one availability zone, meaning the system is redudant and can survive the failure of an entire availability zone (i.e. data centre)
+- The nodes span more than one availability zone, meaning the system is redundant and can survive the failure of an entire availability zone (i.e. data centre)
 - The Consul UI is available to view via a gateway
 - We have two example microservices which register themselves on the cluster, so we can actually see some registered services in the console
 
-As a quick caveat, in reality this setup would typically live in a private subnet, not directly accessible to the outside work except via public facing load balancers. This adds a bit more complexity to the Terraform setup but not much value to the walkthough. A network diagram of how it might look is below, I invite interested readers to try and move to this model as a great exercise to cement the concepts!
+As a quick caveat, in reality this setup would typically live in a private subnet, not directly accessible to the outside work except via public facing load balancers. This adds a bit more complexity to the Terraform setup but not much value to the walk-though. A network diagram of how it might look is below, I invite interested readers to try and move to this model as a great exercise to cement the concepts!
 
 ## Step 1 - Creating our Network
 
@@ -49,7 +51,7 @@ We're using AWS, we need to create a VPC. A VPC is a Virtual Private Cloud. The 
 
 A private network is probably something you regularly use if you work in a company[^5]. Most companies have their own internal network - when you use a computer on that network it can talk to other company computers (such as the company mail server). When you are off that network, you might not be able to access your company email (unless it is publicly available, like gmail, or over a VPN [and by accessing a VPN, you are actually *joining* the network again, albeit remotely]).
 
-Perhaps the most immediately obvious part of a VPC is that *you control the IP addresses*. You specify the *range* of IP addresses which are available to give to machines on the network. When a machine joins, it must have an IP address in that range. It can be assigned dynamically or statically. I'm not going to go into too much detail here, if you are interested let me know and I'll write up an article on VPCs in detail!
+Perhaps the most immediately obvious part of a VPC is that *you control the IP addresses*. You specify the *range* of IP addresses which are available to give to machines on the network. When a machine joins, it is given an IP in that range. I'm not going to go into too much detail here, if you are interested let me know and I'll write up an article on VPCs in detail!
 
 ![](/content/images/2017/01/img-3-vpc.png)
 
@@ -97,7 +99,7 @@ You'll see lots of info about what it is creating, then a success message.
 
 You don't put hosts directly into a VPC, they need to go into a structure called a 'subnet', which is a *part* of a VPC. Subnets get their own subset of the VPC's available IP addresses, which you specify. 
 
-Subnets are used to build *zones* in a network. Why would you need this? Typically it is to manage security. You might have a 'public zone' in which all hosts can be accessed from the internet, and a 'private' zone which is inaccessible directly (and therefore a better location for hosts with sensitive data). You might have an 'operator' zone, which only sysadmins can access, but they can use to get diagnostic information.
+Subnets are used to build *zones* in a network. Why would you need this? Typically it is to manage security. You might have a 'public zone' in which all hosts can be accessed from the internet, and a 'private zone' which is inaccessible directly (and therefore a better location for hosts with sensitive data). You might have an 'operator' zone, which only sysadmins can access, but they can use to get diagnostic information.
 
 Here's a common subnet layout for multi-tiered applications:
 
@@ -126,7 +128,7 @@ With Terraform, resources can depend on each other. In this case, the subnets ne
 
 ### The Internet Gateway, Route Tables and Security Groups
 
-The final parts of the network you can look into in the [./infrastructure/network.tf](https://github.com/dwmkerr/terraform-consul-cluster/blob/master/network.tf) script. These are the Internet Gateway, Route Table and Security Group resources. Essentially they are for controlling access between hosts and the internet. AWS have a [good guide](http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_Scenario1.html) if you are not familiar with these resources; they don't add much to the article so I'll leave you to explore on your own.
+The final parts of the network you can see in the [./infrastructure/network.tf](https://github.com/dwmkerr/terraform-consul-cluster/blob/master/network.tf) script. These are the Internet Gateway, Route Table and Security Group resources. Essentially they are for controlling access between hosts and the internet. AWS have a [good guide](http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_Scenario1.html) if you are not familiar with these resources; they don't add much to the article so I'll leave you to explore on your own.
 
 That's it for the network, we now have the following structure:
 
@@ -138,7 +140,7 @@ If you want to see the code as it stands now, check the [Step 1](https://github.
 
 The Consul documentation recommends running in a cluster or 3 or 5 nodes[^7]. We want to set up a system which is self-healing - if we lose a node, we want to create a new one.
 
-Enter [Auto-Scaling Groups](http://docs.aws.amazon.com/autoscaling/latest/userguide/AutoScalingGroup.html). Auto-scaling groups allow us to define a template for an instance, and ask AWS to make sure there are always a certain number of the instances. If we lose an instance, a new one will be created to keep the group at the correct size[^8].
+Enter [Auto-Scaling Groups](http://docs.aws.amazon.com/autoscaling/latest/userguide/AutoScalingGroup.html). Auto-scaling groups allow us to define a template for an instance, and ask AWS to make sure there are always a certain number of these instances. If we lose an instance, a new one will be created to keep the group at the correct size[^8].
 
 So we now need to create:
 
@@ -149,13 +151,13 @@ So we now need to create:
 
 Or visually:
 
-![Basic Cluster Diagram](/content/images/2017/01/img-5-cluster-basic.png)
+![Basic Cluster Diagram](/content/images/2017/01/img-5-cluster-basic-2.png)
 
 Let's get to it.
 
-### The Launch Configuration
+### The Launch Configuration & Auto-scaling Group
 
-The Launch Configuration will define the characteristics of the instances created by the auto-scaling group:
+The Launch Configuration will define the characteristics of our instances and the auto-scaling group determines the size of our cluster:
 
 ```
 //  Launch configuration for the consul cluster auto-scaling group.
@@ -175,7 +177,10 @@ resource "aws_autoscaling_group" "consul-cluster-asg" {
     launch_configuration = "${aws_launch_configuration.consul-cluster-lc.name}"
     min_size = 5
     max_size = 5
-    vpc_zone_identifier = ["${aws_subnet.public-a.id}", "${aws_subnet.public-b.id}"]
+    vpc_zone_identifier = [
+        "${aws_subnet.public-a.id}",
+        "${aws_subnet.public-b.id}"
+   ]
     lifecycle {
         create_before_destroy = true
     }
@@ -185,7 +190,7 @@ resource "aws_autoscaling_group" "consul-cluster-asg" {
 A few key things to note:
 
 1. I have omitted the `tag` properties in the scripts for brevity
-2. The 'image' for the launch configuration is looked up based on the region we've specified - we're using an image with Docker installed[^9]
+2. The 'image' for the launch configuration is looked up based on the region we've specified - we're a basic linux image[^9]
 3. We are using micro instances, which are free-tier eligible
 4. The auto-scaling group spans both availability zones.
 
@@ -197,13 +202,19 @@ We can also see the new instances:
 
 ![Instances](/content/images/2017/01/img-7-instances.png)
 
-These instances don't do much yet though - they've got Docker pre-installed but no Consul.
+These instances don't do much yet though, we've not installed Docker or Consul.
 
 ### Installing Consul and Accessing the Admin Interface
 
-A 'user data' script is a script which runs once when a newly created host is started in an auto-scaling group. We can create a script in our repo, and reference it in our Terraform script. We add a new file called `user-data.sh` to a `scripts` folder, which installs Consul:
+To set up our instances we use a 'userdata' script' A userdata runs once when an instance is created. We can create a script in our repository, and reference it in our Terraform files.
+
+We add a new file called `consul-node.sh` to a `files` folder. This script installs Docker and runs Consul:
 
 ```bash
+yum install -y docker
+usermod -a -G docker ec2-user
+service docker start
+
 # Get my IP address.
 IP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
 echo "Instance IP is: $IP"
@@ -219,8 +230,9 @@ docker run -d --net=host \
 
 Here's a breakdown of what we're doing:
 
-1. Get our IP address. AWS provide a magic IP address which lets you query data about your instance, see [Instance Metadata & User Metadata](http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html)
-2. Start the Consul docker image in admin mode, with the UI enabled, expecting only one instance
+1. Install Docker. These scripts run as root, so we add the ec2-user to the Docker group, meaning when we log in later on via SSH, we can run Docker
+2. Get our IP address. AWS provide a magic address (169.254.169.254) which lets you query data about your instance, see [Instance Metadata & User Metadata](http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html)
+2. Run the Consul docker image in server mode, with the UI enabled, expecting only one instance
 
 **The actual scripts contains more!** Getting userdata scripts right, testing and debugging them is tricky. See how I do it in detail in [Appendix 1: Logging](#Appendix-1-Logging). 
 
@@ -238,10 +250,16 @@ When Consul is running with the `-ui` option, it provides an admin UI. You can t
 We can install a load balancer in front of our auto-scaling group, to automatically forward incoming traffic to a host. Here's the config:
 
 ```
-resource "aws_elb" "consul-lb-a" {
+resource "aws_elb" "consul-lb" {
     name = "consul-lb-a"
-    security_groups = ["${aws_security_group.consul-cluster-vpc.id}", "${aws_security_group.web.id}"]
-    subnets = ["${aws_subnet.public-a.id}"]
+    security_groups = [
+        "${aws_security_group.consul-cluster-vpc.id}", 
+        "${aws_security_group.web.id}"
+    ]
+    subnets = [
+        "${aws_subnet.public-a.id}",
+        "${aws_subnet.public-b.id}"
+    ]
     listener {
         instance_port = 8500
         instance_protocol = "http"
@@ -315,35 +333,25 @@ There's a nice trick we can use here. We can ask AWS to give us the IP addresses
 
 ![Diagram showing how we decide on a leader IP](/content/images/2017/01/img-12-choose-leader-1.png)
 
-There are a couple of things we need to do to get this right. First, update the userdata script to pick the leader IP, then update the **role** of our nodes so that they have permissions to use the APIs we're going to call.
+There are a couple of things we need to do to get this right. First, update the userdata script to provide the IPs of other nodes when we're starting up, then update the **role** of our nodes so that they have permissions to use the APIs we're going to call.
 
 ### Getting the Cluster IPs
 
 This is actually fairly straightforward. We update our userdata script to the below:
 
-```
-# Start the awslogs service, also start on reboot.
-# Note: Errors go to /var/log/awslogs.log
-sudo service awslogs start
-sudo chkconfig awslogs on
-
-# Install the AWS CLI.
-yum install -y aws-cli
-
+```bash
 # A few variables we will refer to later...
 ASG_NAME=consul-asg
 REGION=ap-southeast-1
 EXPECTED_SIZE=5
-
-# Install the AWS CLI.
-yum install -y aws-cli
 
 # Return the id of each instance in the cluster.
 function cluster-instance-ids {
     # Grab every line which contains 'InstanceId', cut on double quotes and grab the ID:
     #    "InstanceId": "i-example123"
     #....^..........^..^.....#4.....^...
-    aws --region="$REGION" autoscaling describe-auto-scaling-groups --auto-scaling-group-name $ASG_NAME \
+    aws --region="$REGION" autoscaling describe-auto-scaling-groups \
+        --auto-scaling-group-name $ASG_NAME \
         | grep InstanceId \
         | cut -d '"' -f4
 }
@@ -405,7 +413,6 @@ We will need to create a policy which describes the permissions we need, create 
 resource "aws_iam_policy" "leader-discovery" {
     name = "consul-node-leader-discovery"
     path = "/"
-    description = "This policy allows a consul server to discover a consul leader by examining the instances in a consul cluster Auto-Scaling group. It needs to describe the instances in the auto scaling group, then check the IPs of the instances."
     policy = <<EOF
 {
     "Version": "2012-10-17",
@@ -491,7 +498,7 @@ On a new EC2 instance, running in either subnet, with the same roles as the Cons
 # Install Docker
 sudo su
 yum update -y 
-yum install docker
+yum install -y docker
 service docker start
 
 # Get my IP and the IP of any node in the server cluster.
@@ -506,7 +513,7 @@ NODE_IP=$(aws --region="ap-southeast-1" ec2 describe-instances \
     --instance-ids="$NODE_ID")
 
 # Run the consul agent.
-docker run -d --net=host -e 'CONSUL_LOCAL_CONFIG={"leave_on_terminate": true}' \
+docker run -d --net=host \
   consul agent \
   -bind="$IP" \
   -join=$NODE_IP
@@ -536,7 +543,17 @@ Now we can check the Consul UI:
 
 And there we have it. Our new node joins the cluster (as a client), we can register a new service with Consul.
 
+We can call this service from any node in the subnet, seeing output like the below:
+
+![Screenshot of the Zapp service](/content/images/2017/01/img-x-zapp.png)
+
+In this example, I used a DNS SRV query to ask where the `zapp-service` is, was told it was at `10.0.2.158` on port `5000`, then called the service, receiving a response. I can discover any service using this method, from any node. As services are added, removed, moved etc, I can ask Consul for accurate information on where to find them.
+
+Check the [Step 4]() branch to see the code in its current state.
+
 ## Step 5 - Spanner Throwing
+
+We can now try to throw some spanners in the works, to see how resilient the system is.
 
 According to the [Deployment Table](https://www.consul.io/docs/internals/consensus.html#deployment-table) from the Consul documentation, a cluster of five nodes means we have a quorum of three nodes (i.e. a minimum of three nodes are needed for a working system). This means we can tolerate the failure of two nodes.
 
@@ -556,37 +573,37 @@ We can see from the load balancer monitoring that it notices we have unhealthy n
 
 A quick check of the admin dashboard shows we now have a recovered system, with five healthy nodes:
 
-![Screenshot showing recovered system]()
+![Screenshot showing recovered system](/content/images/2017/01/img-18b-recovered.png)
 
-There's another failure earlier, a node was lost when I accidentally deleted it rather than the test instance I was running scripts on!
+The nodes which were terminated are still listed as failing. After 72 hours Consul will stop trying to periodically reconnect to these nodes and completely remove them[^16].
 
 ## Wrapping Up
 
-There's a lot to learn here, particularly if you are not particularly familiar with AWS. However, this should provide a good starting point to think about building your own resilient and robust systems.
+Hopefully this should provide a good starting point to think about building your own resilient and robust systems for services like Consul.
 
 Interesting areas to look into to extend the project would be:
 
 1. Setting up alerts so that if we lose more than one node, we are informed
 2. Automating resilience tests by programatically bringing down servers and monitoring how long it takes the system to return to five nodes
-3. Auto-scaling by load by reducing the cluster to three when load is low, scale up to five only as needed
-4. Breaking out the script: Instead of using a `user data` script to set up a node, bake it into a new custom AMI with [Packer](https://www.packer.io/)
-5. Adding alerts for if we lose three of more nodes, which always requires manual intervention (see [Outage Recovery](https://www.consul.io/docs/guides/outage.html))
+3. Instead of using a userdata script to set up a node, bake it into a new custom AMI with [Packer](https://www.packer.io/)
+4. Adding alerts for if we lose three of more nodes, which always requires manual intervention (see [Outage Recovery](https://www.consul.io/docs/guides/outage.html))
 
-If you find this article, please do let me know. Any questions or comments are welcome!
+As always, any questions or comments are welcome! All code is available at [github.com/dwmkerr/terraform-consul-cluster](https://github.com/dwmkerr/terraform-consul-cluster).
 
 ---
 
 ## Appendix 1: Logging
 
-Small typos or mistakes in the userdata script are almost impossible to effectively diagnose. The scripts were actually built in this way:
+Small typos or mistakes in the userdata script are almost impossible to effectively diagnose. The scripts were actually built in the following way:
 
 1. Draft a script on my local machine which configures script logging and CloudWatch[^13]
 2. Spin up a new EC2 instance manually
 3. SSH onto the instance, and run the script line by line until I'm sure it's right
+4. Ensure the logs are forwarded to CloudWatch, then add the more complex features and repeatedly test
 
-This'll often take a few attempts, particularly to get security groups right (which will require recreating the instance). 
+I've included CloudWatch logging in the code. In this write-up I've omitted this code as it is purely for diagnostics and doesn't contribute to the main topic. The setup is in the [`consul-node.sh`](https://github.com/dwmkerr/terraform-consul-cluster/blob/master/files/consul-node.sh) and [`consul-node-role.tf`](`https://github.com/dwmkerr/terraform-consul-cluster/blob/master/consul-node-role.tf) files.
 
-I've included CloudWatch logging in the actual setup, so that it is easy to check the userdata script log, docker logs and so on. I've deliberately omitted the code which relates to this as it is purely for diagnostics and doesn't contribute to the main topic. If you want more details, let me know, or just check the code. I would heartily recommend setting up logging like this for all but the most straightforward projects:
+If you want more details, let me know, or just check the code. I would heartily recommend setting up logging like this for all but the most straightforward projects:
 
 ![Screenshot showing logs](/content/images/2017/01/img-19-cloudwatch-1.png)
 
@@ -598,13 +615,13 @@ Being able to diagnose issues like this is vital when working with distributed s
 
 [^1]: This kind of pattern is critical in the world of microservices, where many small services will be running on a cluster. Services may die, due to errors or failing hosts, and be recreated on new hosts. Their IPs and ports may be ephemeral.It is essential that the system as a whole has a registry of where each service lives and how to access it. Such a registry must be *resilient*, as it is an essential part of the system.
 
-[^2]: Most popular is a fairly loose term. Well ranked by Gartner and anecdotally with the largest infrastructure footprint. https://www.gartner.com/doc/reprints?id=1-2G2O5FC&ct=150519&st=sb and 
+[^2]: Most popular is a fairly loose term. Well ranked by Gartner and anecdotally with the largest infrastructure footprint. https://www.gartner.com/doc/reprints?id=1-2G2O5FC&ct=150519&st=sb
 
 [^3]: This is AWS parlance again. An availabilty zone is an isolated datacenter. Theoretically, spreading nodes across AZs will increase resilience as it is less likely to have catastrophic failures or outages across multiple zones.
 
 [^4]: I don't get money from Udemy or anyone else for writing anything on this blog. All opinions are purely my own and influenced by my own experience, not sponsorship. Your milage may vary (yada yada) but I found the course quite good: https://www.udemy.com/aws-certified-solutions-architect-associate/.
 
-[^5]: For more expert readers that may sound horribly patronising, I don't mean it to be. For many less experienced technologists the basics of networking could be more unfamiliar!
+[^5]: For more expert readers that may sound horribly patronising, I don't mean it to be. For many less experienced technologists the basics of networking might be more unfamiliar!
 
 [^6]: A subnet cannot span availability zones, so we need one for each.
 
@@ -612,7 +629,7 @@ Being able to diagnose issues like this is vital when working with distributed s
 
 [^8]: A common pattern is to actually make the group size dynamic, responding to events. For example, we could have a group of servers which increases in size if the average CPU load of the hosts stays above 80% for five minutes, and scales down if it goes below 10% for ten minutes. This is more common for app and web servers and not needed for our system.
 
-[^9]: Specifically, this is the AMI for the Amazon ECS EC2 instance. This is normally used for instances which run in ECS clusters, but as it has Docker preinstalled and running, it saves us having to install it ourselves.
+[^9]: Specifically, the current latest [Amazon Linux AMI](https://aws.amazon.com/amazon-linux-ami/).
 
 [^12]: Check the admin UI every 30 seconds, more than 3 seconds indicates a timeout and failure. Two failures in a row means an unhealthy host, which will be destroyed, two successes in a row for a new host means healthy, which means it will receive traffic.
 
@@ -621,6 +638,8 @@ Being able to diagnose issues like this is vital when working with distributed s
 [^14]: This is a fairly sophisticated topic in itself, see [Consul - Consensus Protocol](https://www.consul.io/docs/internals/consensus.html) for details.
 
 [^15]: In fact, we actually have more permissions required, because in the 'real' code we also have logs forwarded to CloudWatch.
+
+[^16]: These nodes can be removed manually, see [Consul Force Leave](https://www.consul.io/docs/commands/force-leave.html).
 
 ---
 
