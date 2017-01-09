@@ -33,16 +33,16 @@ EOF
 sudo service awslogs start
 sudo chkconfig awslogs on
 
-# Install the AWS CLI.
-yum install -y aws-cli
+# Install Docker, add ec2-user, start Docker and ensure startup on restart
+yum install -y docker
+usermod -a -G docker ec2-user
+service docker start
+chkconfig docker on
 
 # A few variables we will refer to later...
 ASG_NAME=consul-asg
 REGION=ap-southeast-1
 EXPECTED_SIZE=5
-
-# Install the AWS CLI.
-yum install -y aws-cli
 
 # Return the id of each instance in the cluster.
 function cluster-instance-ids {
@@ -72,15 +72,18 @@ do
     sleep 1
 done 
 
-# Get my IP address and the initial leader IP address.
+# Get my IP address, all IPs in the cluster, then just the 'other' IPs...
 IP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
-LEADER_IP=$(cluster-ips | sort | head -1)
-echo "Instance IP is: $IP, Initial Leader IP is: $LEADER_IP"
+mapfile -t ALL_IPS < <(cluster-ips)
+OTHER_IPS=( ${ALL_IPS[@]/{$IP}/} )
+echo "Instance IP is: $IP, Cluster IPs are: ${ALL_IPS[@]}, Other IPs are: ${OTHER_IPS[@]}"
 
 # Start the Consul server.
 docker run -d --net=host \
     --name=consul \
     consul agent -server -ui \
-    -bind="$IP" -retry-join="$LEADER_IP" \
+    -bind="$IP" \
     -client="0.0.0.0" \
+    -retry-join="${OTHER_IPS[0]}" -retry-join="${OTHER_IPS[1]}" \
+    -retry-join="${OTHER_IPS[2]}" -retry-join="${OTHER_IPS[3]}" \
     -bootstrap-expect="$EXPECTED_SIZE"

@@ -305,23 +305,19 @@ docker run -d --net=host \
     -bootstrap-expect="5"
 ```
 
-The problem is **this won't work**... We need to tell each node the address of *another* server in the cluster. For example, if we start five nodes, we should tell nodes 2-5 the address of node 1, so that the nodes can discover each other:
-
-![Diagram showing five nodes starting, all joining node 1](/content/images/2017/01/img-11-join-cluster.png)
-
-Every time a new node joins node 1, it will get its IP and broadcast it to the nodes which have originally joined.
+The problem is **this won't work**... We need to tell each node the address of *another* server in the cluster. For example, if we start five nodes, we should tell nodes 2-5 the address of node 1, so that the nodes can discover each other.
 
 The challenge is how do we get the IP of node 1? The IP addresses are determined by the network, we don't preset them so cannot hard code them. Also, we can expect nodes to occasionally die and get recreated, so the IP addresses of nodes will in fact change over time.
 
 ### Getting the IP addresses of nodes in the cluster
 
-There's a nice trick we can use here. We can ask AWS to give us the IP addresses of each host in the auto-scaling group. We then pick an arbitrary IP address to be the leader. Each node needs to pick the *same* leader. A trivial way to do this is simply pick the lowest IP address of the set:
+There's a nice trick we can use here. We can ask AWS to give us the IP addresses of each host in the auto-scaling group. If we tell each node the addresses of the *other nodes*, then they will elect a leader themselves[^14].
 
-![Diagram showing how we decide on a leader IP](/content/images/2017/01/img-12-choose-leader.png)
+![Diagram showing how we decide on a leader IP](/content/images/2017/01/img-12-choose-leader-1.png)
 
 There are a couple of things we need to do to get this right. First, update the userdata script to pick the leader IP, then update the **role** of our nodes so that they have permissions to use the APIs we're going to call.
 
-### Picking a leader IP
+### Getting the Cluster IPs
 
 This is actually fairly straightforward. We update our userdata script to the below:
 
@@ -370,17 +366,19 @@ do
     sleep 1
 done 
 
-# Get my IP address and the initial leader IP address.
+# Get my IP address, all IPs in the cluster, then just the 'other' IPs...
 IP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
-LEADER_IP=$(cluster-ips | sort | head -1)
-echo "Instance IP is: $IP, Initial Leader IP is: $LEADER_IP"
+mapfile -t ALL_IPS < <(cluster-ips)
+OTHER_IPS=( ${ALL_IPS[@]/{$IP}/} )
+echo "Instance IP is: $IP, Cluster IPs are: ${CLUSTER_IPS[@]}, Other IPs are: ${OTHER_IPS[@]}"
 
 # Start the Consul server.
 docker run -d --net=host \
     --name=consul \
     consul agent -server -ui \
-    -bind="$IP" -retry-join="$LEADER_IP" \
-    -client="0.0.0.0" \
+    -bind="$IP" \
+    -retry-join="${OTHER_IPS[0]}" -retry-join="${OTHER_IPS[1]}" \
+    -retry-join="${OTHER_IPS[2]}" -retry-join="${OTHER_IPS[3]}" \
     -bootstrap-expect="$EXPECTED_SIZE"
 ```
 
@@ -390,10 +388,9 @@ Right, here's what's going on:
 2. We create a `cluster-instance-ids` function which returns the ID of each instance in the auto-scaling group
 3. We create a `cluster-ips` function which returns the private IP address of each instance in the cluster.
 4. We wait until the auto-scaling group has our expected number of instances (it can take a while for them all to be created)
-5. We get the 5 IP addresses and arbitrarily pick the lowest one as the leader
-6. We start the Consul agent in server mode, expecting 5 nodes and offering the leader IP
-
-What is is important is that each instance will use the *same* leader IP to join the cluster[^14].
+5. We get the 5 IP addresses
+6. We remove our IP from the array, leaving us with the IPs of the *other* nodes
+7. We start the Consul agent in server mode, expecting 5 nodes and offering the IP of each other agent
 
 The problem is, if we try to run the script we will fail, because calling the AWS APIs requires some permissions we don't have. Let's fix that.
 
@@ -493,7 +490,9 @@ On a new EC2 instance, running in either subnet, with the same roles as the Cons
 ```
 # Install Docker
 sudo su
-yum update -y aws-cli docker
+yum update -y 
+yum install docker
+service docker start
 
 # Get my IP and the IP of any node in the server cluster.
 IP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
@@ -535,34 +534,43 @@ Now we can check the Consul UI:
 
 ![The Consul UI showing a new service](/content/images/2017/01/img-15-sample-service.png)
 
-And there we have it. Our new node joins the cluster (as a client), we can register a new service and discover it later.
+And there we have it. Our new node joins the cluster (as a client), we can register a new service with Consul.
 
 ## Step 5 - Spanner Throwing
 
-Let's run some tests to see how resilient we are. We should at the very least try:
+According to the [Deployment Table](https://www.consul.io/docs/internals/consensus.html#deployment-table) from the Consul documentation, a cluster of five nodes means we have a quorum of three nodes (i.e. a minimum of three nodes are needed for a working system). This means we can tolerate the failure of two nodes.
 
-1. Killing a consul node, does it build a new quorum automatically and correctly? How long does it take?
-2. Killing the consul leader, same question as above?
-3. Killing 4 nodes at once, can we get back to a quorum?
-4. Spend one hour killing a random node every five minutes, do we maintain a quorum whenever possible?
-5. Kill every node, see what happens!
+The easiest way to test this is to simply manually kill two nodes:
 
-[Netflix](TODO) popularised tests like this with programs such as [Chaos Monkey](TODO) which run around a network killing things, but this is not a new practice. When designing systems it's great to play these kind of games; try and break the system, find novel ways to exercise its robustness. We don't necessarily need to be able to survive each scenario, if there are scenarios we know we cannot recover from automatically, that's fine, at least we can build a playbook for the devops team so we can be prepared.
+![Screenshot showing two AWS instances being terminated](/content/images/2017/01/img-16-terminate.png)
 
-Here's a snippet which kills a random node:
+If we pick two random nodes, as above, and terminate them, we see the cluster determines that we have two failed nodes but will still function (if one was the leader, a new leader will be automatically elected):
 
-```bash
-```
+![Screenshot showing the cluster highlighting two failed nodes](/content/images/2017/01/img-17-node-failure.png)
 
-I've used bash to do the work, more sophisticated tests might be better written in code. The rest of the tests are available to look over in the [./tests](TODO) folder.
+What's nice about this setup is that no manual action is needed to recover. Our load balancer will notice the nodes are unhealthy and stop forwarding traffic. Our auto-scaling group will see the nodes have terminated and create two new ones, which will join the cluster in the same way as the original nodes. Once they join, the load balancer will find them healthy and bring them back into rotation.
+
+We can see from the load balancer monitoring that it notices we have unhealthy nodes and also notices when new ones come into service:
+
+![Screenshot showing the load balancer monitoring](/content/images/2017/01/img-18-recovery-1.png)
+
+A quick check of the admin dashboard shows we now have a recovered system, with five healthy nodes:
+
+![Screenshot showing recovered system]()
+
+There's another failure earlier, a node was lost when I accidentally deleted it rather than the test instance I was running scripts on!
 
 ## Wrapping Up
 
-There's a lot to see here, particularly if you are not particularly familiar with AWS. However, this should provide a good starting point to think about building your own resilient and robust systems. Interesting areas to look into to extend the project might be:
+There's a lot to learn here, particularly if you are not particularly familiar with AWS. However, this should provide a good starting point to think about building your own resilient and robust systems.
 
-1. Automating the tests: Programatically monitor the cluster membership, if each test doesn't eventually result in a cluster of five nodes, the test fails.
-2. Scaling by load: Reduce the quorum to three when load is low, scale up to five only as needed.
-3. Breaking out the script: Instead of using a `user data` script to set up a node, bake it into a new custom AMI with [Packer]()
+Interesting areas to look into to extend the project would be:
+
+1. Setting up alerts so that if we lose more than one node, we are informed
+2. Automating resilience tests by programatically bringing down servers and monitoring how long it takes the system to return to five nodes
+3. Auto-scaling by load by reducing the cluster to three when load is low, scale up to five only as needed
+4. Breaking out the script: Instead of using a `user data` script to set up a node, bake it into a new custom AMI with [Packer](https://www.packer.io/)
+5. Adding alerts for if we lose three of more nodes, which always requires manual intervention (see [Outage Recovery](https://www.consul.io/docs/guides/outage.html))
 
 If you find this article, please do let me know. Any questions or comments are welcome!
 
@@ -570,24 +578,27 @@ If you find this article, please do let me know. Any questions or comments are w
 
 ## Appendix 1: Logging
 
-I would not normally create a userdata script expect everything to work, there's too much that can go wrong. I actually set up the server like this is:
+Small typos or mistakes in the userdata script are almost impossible to effectively diagnose. The scripts were actually built in this way:
 
 1. Draft a script on my local machine which configures script logging and CloudWatch[^13]
 2. Spin up a new EC2 instance manually
 3. SSH onto the instance, and run the script line by line until I'm sure it's right
 
-This'll often take a few attempts, particularly to get security groups right (which will require recreating the instance). I've deliberately omitted the code which relates to CloudWatch and logging setup as it is purely for admin diagnostics and doesn't contribute to the main topic. If you want more details, let me know, or just check the code.
+This'll often take a few attempts, particularly to get security groups right (which will require recreating the instance). 
 
-TODO relevant lines:
-- a
-- b
-- c
+I've included CloudWatch logging in the actual setup, so that it is easy to check the userdata script log, docker logs and so on. I've deliberately omitted the code which relates to this as it is purely for diagnostics and doesn't contribute to the main topic. If you want more details, let me know, or just check the code. I would heartily recommend setting up logging like this for all but the most straightforward projects:
+
+![Screenshot showing logs](/content/images/2017/01/img-19-cloudwatch-1.png)
+
+Being able to diagnose issues like this is vital when working with distributed systems which may be generating many log files.
 
 ---
 
+**Footnotes**
+
 [^1]: This kind of pattern is critical in the world of microservices, where many small services will be running on a cluster. Services may die, due to errors or failing hosts, and be recreated on new hosts. Their IPs and ports may be ephemeral.It is essential that the system as a whole has a registry of where each service lives and how to access it. Such a registry must be *resilient*, as it is an essential part of the system.
 
-[^2]: Most popular is a fairly loose term.  https://www.gartner.com/doc/reprints?id=1-2G2O5FC&ct=150519&st=sb and 
+[^2]: Most popular is a fairly loose term. Well ranked by Gartner and anecdotally with the largest infrastructure footprint. https://www.gartner.com/doc/reprints?id=1-2G2O5FC&ct=150519&st=sb and 
 
 [^3]: This is AWS parlance again. An availabilty zone is an isolated datacenter. Theoretically, spreading nodes across AZs will increase resilience as it is less likely to have catastrophic failures or outages across multiple zones.
 
@@ -607,22 +618,13 @@ TODO relevant lines:
 
 [^13]: Amazon's service for managing and aggregating logs
 
-[^14]: There's actually an even better way, we can provide *each* IP address to each node, by providing additional `-join` flags. I'll leave this as something you can investigate yourself.
+[^14]: This is a fairly sophisticated topic in itself, see [Consul - Consensus Protocol](https://www.consul.io/docs/internals/consensus.html) for details.
 
-[^15]: In fact, we actually have more permissions required, because in the 'real' code we also have logs forwarded to CloudWatch. See [here](TODO) for the details.
-
----
+[^15]: In fact, we actually have more permissions required, because in the 'real' code we also have logs forwarded to CloudWatch.
 
 ---
 
-Further Reading:
+**Further Reading**
 
 1. [Consul - Consensus Protocol](https://www.consul.io/docs/internals/consensus.html)
 2. [What you have to know about Consul and how to beat the outage problem](https://sitano.github.io/2015/10/06/abt-consul-outage/), John Koepi
-
-
-
-Notes:
-
-- Quorum is 3, losing quorum requires manual intervention (i.e. alarm)
-- 

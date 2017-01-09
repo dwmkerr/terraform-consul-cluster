@@ -1,22 +1,28 @@
-//  AMI Images for ECS optimised linux.
-variable "ami_ecs_optimised" {
-    description = "AMI ids by region for ECS Optimised Linux"
+// AMIs by region for AWS Optimised Linux
+variable "ami_aws_linux" {
+    description = "AMIs by region for AWS Optimised Linux 2016.09.1" 
     default = {
-        us-east-1 = "ami-a88a46c5"
-        us-west-1 = "ami-34a7e354"
-        us-west-2 = "ami-ae0acdce"
-        eu-west-1 = "ami-ccd942bf"
-        eu-central-1 = "ami-4a5eb625"
-        ap-northeast-1 = "ami-4aab5d2b"
-        ap-southeast-1 = "ami-24c71547"
-        ap-southeast-2 = "ami-0bf2da68"
+        us-east-1 = "ami-9be6f38c"
+        us-east-2 = "ami-38cd975d"
+        us-west-1 = "ami-1e299d7e"
+        us-west-2 = "ami-b73d6cd7"
+        ca-central-1 = "ami-eb20928f"
+        eu-west-1 = "ami-c51e3eb6"
+        eu-west-2 = "ami-bfe0eadb"
+        eu-central-1 = "ami-211ada4e"
+        ap-northeast-1 = "ami-9f0c67f8"
+        ap-northeast-2 = "ami-94bb6dfa"
+        ap-southeast-1 = "ami-4dd6782e"
+        ap-southeast-2 = "ami-28cff44b"
+        ap-south-1 = "ami-9fc7b0f0"
+        sa-east-1 = "ami-bb40d8d7"
     }
 }
 
 //  Launch configuration for the consul cluster auto-scaling group.
 resource "aws_launch_configuration" "consul-cluster-lc" {
     name_prefix = "consul-node-"
-    image_id = "${lookup(var.ami_ecs_optimised, var.region)}"
+    image_id = "${lookup(var.ami_aws_linux, var.region)}"
     instance_type = "t2.micro"
     user_data = "${file("files/consul-node.sh")}"
     iam_instance_profile = "${aws_iam_instance_profile.consul-instance-profile.id}"
