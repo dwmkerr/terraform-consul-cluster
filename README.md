@@ -53,8 +53,20 @@ files/consul-node.sh # Setup script for the cluster nodes.
 example-service/     # A goofy example microservice used to test the project.
 ```
 
+The template rendering for terraform was unfortunately being buggy, so instead the variables are injected into the userdata, exported and then the consul-bootstrap is CURLed:
+
+- userdata -  https://github.com/arehmandev/terraform-consul-cluster/blob/master/modules/consul/files/consul-node.sh
+
+- CURLed bootstrap - https://raw.githubusercontent.com/arehmandev/Consul-bashstrap/master/consul-node.sh
+
 ## More info
 
 A detailed write up of how this code works is available at:
 
 http://www.dwmkerr.com/creating-a-resilient-consul-cluster-for-docker-microservice-discovery-with-terraform-and-aws/
+
+## Contributors
+
+arehmandev - Felt inspired by this project and ended up modularizing it!
+
+Tested 11/01/17, terraform 0.8.3
