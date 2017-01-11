@@ -1,3 +1,9 @@
+# AWS Keypair for SSH
+resource "aws_key_pair" "auth" {
+  key_name   = "${var.key_name}"
+  public_key = "${file(var.public_key_path)}"
+}
+
 // AMIs by region for AWS Optimised Linux
 data "aws_ami" "amazonlinux" {
   most_recent = true
@@ -25,10 +31,14 @@ data "aws_ami" "amazonlinux" {
   }
 }
 
-# AWS Keypair for SSH
-resource "aws_key_pair" "auth" {
-  key_name   = "${var.key_name}"
-  public_key = "${file(var.public_key_path)}"
+data "template_file" "consul" {
+  template = "${file("${path.module}/files/consul-node.sh")}"
+
+  vars {
+    asgname = "${aws_autoscaling_group.consul-cluster-asg.name}"
+    region  = "${var.adminregion}"
+    size    = "${var.min_size}"
+  }
 }
 
 //  Launch configuration for the consul cluster auto-scaling group.
@@ -36,7 +46,7 @@ resource "aws_launch_configuration" "consul-cluster-lc" {
   name_prefix          = "consul-node-"
   image_id             = "${data.aws_ami.amazonlinux.image_id}"
   instance_type        = "${var.amisize}"
-  user_data            = "${file("${path.module}/files/consul-node.sh")}"
+  user_data            = "${data.template_file.consul.rendered}"
   iam_instance_profile = "${aws_iam_instance_profile.consul-instance-profile.id}"
 
   security_groups = [
@@ -81,7 +91,7 @@ resource "aws_elb" "consul-lb" {
 
 //  Auto-scaling group for our cluster.
 resource "aws_autoscaling_group" "consul-cluster-asg" {
-  depends_on = ["aws_launch_configuration.consul-cluster-lc"]
+  depends_on           = ["aws_launch_configuration.consul-cluster-lc"]
   name                 = "consul-asg"
   launch_configuration = "${aws_launch_configuration.consul-cluster-lc.name}"
   min_size             = "${var.min_size}"

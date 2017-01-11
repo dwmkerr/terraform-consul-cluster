@@ -40,9 +40,9 @@ service docker start
 chkconfig docker on
 
 # A few variables we will refer to later...
-ASG_NAME=consul-asg
-REGION=ap-southeast-1
-EXPECTED_SIZE=5
+ASG_NAME=${asgname}
+REGION=${region}
+EXPECTED_SIZE=${size}
 
 # Return the id of each instance in the cluster.
 function cluster-instance-ids {
@@ -70,7 +70,7 @@ while COUNT=$(cluster-instance-ids | wc -l) && [ "$COUNT" -lt "$EXPECTED_SIZE" ]
 do
     echo "$COUNT instances in the cluster, waiting for $EXPECTED_SIZE instances to warm up..."
     sleep 1
-done 
+done
 
 # Get my IP address, all IPs in the cluster, then just the 'other' IPs...
 IP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
