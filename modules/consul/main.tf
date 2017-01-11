@@ -35,7 +35,7 @@ data "template_file" "consul" {
   template = "${file("${path.module}/files/consul-node.sh")}"
 
   vars {
-    asgname = "${aws_autoscaling_group.consul-cluster-asg.name}"
+    asgname = "${var.asgname}"
     region  = "${var.adminregion}"
     size    = "${var.min_size}"
   }
@@ -92,7 +92,7 @@ resource "aws_elb" "consul-lb" {
 //  Auto-scaling group for our cluster.
 resource "aws_autoscaling_group" "consul-cluster-asg" {
   depends_on           = ["aws_launch_configuration.consul-cluster-lc"]
-  name                 = "consul-asg"
+  name                 = "${var.asgname}"
   launch_configuration = "${aws_launch_configuration.consul-cluster-lc.name}"
   min_size             = "${var.min_size}"
   max_size             = "${var.max_size}"

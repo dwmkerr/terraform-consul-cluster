@@ -18,4 +18,5 @@ module "consul-cluster" {
   myip            = "0.0.0.0/0"
   key_name        = "consul-cluster"
   public_key_path = "${var.public_key_path}"
+  asgname         = "consul-asg"
 }
