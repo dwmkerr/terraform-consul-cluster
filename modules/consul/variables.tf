@@ -21,3 +21,7 @@ variable "subnet_cidr1" {}
 variable "subnet_cidr2" {}
 
 variable "myip" {}
+
+variable "key_name" {}
+
+variable "public_key_path" {}

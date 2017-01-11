@@ -20,6 +20,12 @@ data "aws_ami" "amazonlinux" {
   }
 }
 
+# AWS Keypair for SSH
+resource "aws_key_pair" "auth" {
+  key_name   = "${var.key_name}"
+  public_key = "${file(var.public_key_path)}"
+}
+
 //  Launch configuration for the consul cluster auto-scaling group.
 resource "aws_launch_configuration" "consul-cluster-lc" {
   name_prefix          = "consul-node-"
@@ -38,7 +44,7 @@ resource "aws_launch_configuration" "consul-cluster-lc" {
     create_before_destroy = true
   }
 
-  key_name = "consul-cluster"
+  key_name = "${var.key_name}"
 }
 
 //  Load balancers for our consul cluster.
