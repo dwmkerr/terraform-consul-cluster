@@ -11,15 +11,15 @@ Please install the following components:
 
 ## Creating the Cluster
 
-To create the cluster, register for an AWS account. You'll need to keep track of your *Secret Key* and *Access Key*. For instructions.
+Feel free to modify the module variables (in main.tf) and the variables in terraform.tfvars.
+To launch, just run:
 
-Now just run:
-
-```bash
-terraform apply
+```
+1. terraform get && terraform plan
+2. terraform apply
 ```
 
-You will be asked to provide your Secret Key, Access Key and Region. When the provisioning is complete, you should see a message like:
+By default this will use your default AWS CLI profile and associated region, feel free to modify this in tfars.
 
 ```
 Apply complete! Resources: 19 added, 0 changed, 0 destroyed.
@@ -41,13 +41,13 @@ terraform destroy
 
 ## Project Structure
 
-The project has the following structure:
+The module has the following structure:
 
 ```
 variables.tf         # The basic terraform variables. Used in later files.
-network.tf           # Network configuration. Defines the VPC, subnets, access etc.
-consul-cluster.tf    # Cluster configuration. Defines the Auto-scaling group, auto-scaling instance config etc.
-consul-node-role.tf  # Defines policies and a role for cluster nodes.
+01-vpc.tf           # Network configuration. Defines the VPC, subnets, access etc.
+main.tf    # Cluster configuration. Defines the Auto-scaling group, auto-scaling instance config etc.
+02-consul-node-role.tf  # Defines policies and a role for cluster nodes.
 outputs.tf           # Useful data we capture when creating infrastructure.
 files/consul-node.sh # Setup script for the cluster nodes.
 example-service/     # A goofy example microservice used to test the project.
