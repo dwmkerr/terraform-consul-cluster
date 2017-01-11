@@ -10,6 +10,11 @@ data "aws_ami" "amazonlinux" {
   }
 
   filter {
+    name   = "root-device-type"
+    values = ["ebs"]
+  }
+
+  filter {
     name   = "virtualization-type"
     values = ["hvm"]
   }
@@ -76,6 +81,7 @@ resource "aws_elb" "consul-lb" {
 
 //  Auto-scaling group for our cluster.
 resource "aws_autoscaling_group" "consul-cluster-asg" {
+  depends_on = ["aws_launch_configuration.consul-cluster-lc"]
   name                 = "consul-asg"
   launch_configuration = "${aws_launch_configuration.consul-cluster-lc.name}"
   min_size             = "${var.min_size}"
