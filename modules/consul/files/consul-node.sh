@@ -1,9 +1,13 @@
 #!/bin/bash
 
-export ASG_NAME="${asgname}"
-export REGION="${region}"
-export EXPECTED_SIZE="${size}"
+ASG_NAME="${asgname}"
+REGION="${region}"
+EXPECTED_SIZE="${size}"
 
-curl https://raw.githubusercontent.com/arehmandev/Consul-bashstrap/master/consul-node.sh | sh
+export ASG_NAME
+export REGION
+export EXPECTED_SIZE
+
+curl https://raw.githubusercontent.com/arehmandev/Consul-bashstrap/master/consul-node.sh | bash
 
 echo "Bootstrap completed"
