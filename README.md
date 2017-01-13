@@ -53,11 +53,10 @@ files/consul-node.sh # Setup script for the cluster nodes.
 example-service/     # A goofy example microservice used to test the project.
 ```
 
-The template rendering for terraform was unfortunately being buggy, so instead the variables are injected into the userdata, exported and then the consul-bootstrap is CURLed:
+The template renderings fixed:
 
 - userdata -  https://github.com/arehmandev/terraform-consul-cluster/blob/master/modules/consul/files/consul-node.sh
 
-- CURLed bootstrap - https://raw.githubusercontent.com/arehmandev/Consul-bashstrap/master/consul-node.sh
 
 ## More info
 
