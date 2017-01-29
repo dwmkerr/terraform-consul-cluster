@@ -25,31 +25,40 @@ This will keep your AWS credentials in the `$HOME/.aws/credentials` file, which 
 
 ## Creating the Cluster
 
-Feel free to modify the module variables (in main.tf) and the variables in terraform.tfvars.
 The cluster is implemented as a [Terraform Module](https://www.terraform.io/docs/modules/index.html). To launch, just run:
 
 ```bash
 # Create the module.
 terraform get
 
-# See what we will create, or do a dry run! If there are issues
+# See what we will create, or do a dry run!
 terraform plan
 
 # Create the cluster!
 terraform apply
 ```
 
-By default this will use your default AWS CLI profile and associated region, feel free to modify this in tfars.
+You will be asked for a region to deploy in, use `us-east-1` should work fine! You can configure the nuances of how the cluster is created in the [`main.tf`](./main.tf) file. Once created, you will see a message like:
 
 ```
-Apply complete! Resources: 19 added, 0 changed, 0 destroyed.
+$ terraform apply
+var.region
+  Region to deploy the Consul Cluster into
+
+  Enter a value: ap-southeast-1
 
 ...
 
-consul-dns = consul-lb-734949600.ap-southeast-1.elb.amazonaws.com
+Apply complete! Resources: 20 added, 0 changed, 0 destroyed.
+
+...
+
+Outputs:
+
+consul-dns = consul-lb-1577031185.ap-southeast-1.elb.amazonaws.com
 ```
 
-Navigate to port 8500 at address provided (e.g. http://consul-lb-734949600.ap-southeast-1.elb.amazonaws.com:8500) and you will see the Consul interface.
+Navigate to port 8500 at address provided (e.g. http://consul-lb-1577031185.ap-southeast-1.elb.amazonaws.com:8500) and you will see the Consul interface.
 
 ## Destroying the Cluster
 
@@ -64,19 +73,17 @@ terraform destroy
 The module has the following structure:
 
 ```
-variables.tf         # The basic terraform variables. Used in later files.
-01-vpc.tf           # Network configuration. Defines the VPC, subnets, access etc.
-main.tf    # Cluster configuration. Defines the Auto-scaling group, auto-scaling instance config etc.
-02-consul-node-role.tf  # Defines policies and a role for cluster nodes.
-outputs.tf           # Useful data we capture when creating infrastructure.
-files/consul-node.sh # Setup script for the cluster nodes.
-example-service/     # A goofy example microservice used to test the project.
+main.tf                   # Cluster definition.
+variables.tf              # Basic config.
+modules/consul/main.tf    # Main cluster setup.
+modules/consul/variables.tf    # Inputs for the module.
+modules/consul/outputs.tf # Outputs for the module.
+modules/consul/01-vpc.tf  # Network configuration. Defines the VPC, subnets, access etc.
+modules/consul/02-consul-node-role.tf  # Defines policies and a role for cluster nodes.
+modules/consul/files/consul-node.sh # Setup script for the cluster nodes.
+example-service/          # A goofy example microservice used to test the project.
+article/                  # The text and images for the article on dwmkerr.com
 ```
-
-The template renderings fixed:
-
-- userdata -  https://github.com/arehmandev/terraform-consul-cluster/blob/master/modules/consul/files/consul-node.sh
-
 
 ## More info
 

@@ -23,7 +23,7 @@ resource "aws_internet_gateway" "consul-cluster" {
 resource "aws_subnet" "public-a" {
   vpc_id                  = "${aws_vpc.consul-cluster.id}"
   cidr_block              = "${var.subnet_cidr1}"                       // i.e. 10.0.1.0 to 10.0.1.255
-  availability_zone       = "${lookup(var.subnetaz1, var.adminregion)}"
+  availability_zone       = "${lookup(var.subnetaz1, var.region)}"
   map_public_ip_on_launch = true
   depends_on              = ["aws_internet_gateway.consul-cluster"]
 
@@ -36,7 +36,7 @@ resource "aws_subnet" "public-a" {
 resource "aws_subnet" "public-b" {
   vpc_id                  = "${aws_vpc.consul-cluster.id}"
   cidr_block              = "${var.subnet_cidr2}"                       // i.e. 10.0.2.0 to 10.0.1.255
-  availability_zone       = "${lookup(var.subnetaz2, var.adminregion)}"
+  availability_zone       = "${lookup(var.subnetaz2, var.region)}"
   map_public_ip_on_launch = true
   depends_on              = ["aws_internet_gateway.consul-cluster"]
 

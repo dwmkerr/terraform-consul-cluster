@@ -36,7 +36,7 @@ data "template_file" "consul" {
 
   vars {
     asgname = "${var.asgname}"
-    region  = "${var.adminregion}"
+    region  = "${var.region}"
     size    = "${var.min_size}"
   }
 }
