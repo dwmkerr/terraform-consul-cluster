@@ -1,12 +1,15 @@
-variable "access_key" { 
-  description = "AWS Access Key"
+variable "adminregion" {}
+
+variable "adminprofile" {}
+
+variable "public_key_path" {
+  default = "~/.ssh/id_rsa.pub"
 }
 
-variable "secret_key" { 
-  description = "AWS Secret Key"
+variable "subnetaz1" {
+  type = "map"
 }
 
-variable "region"     { 
-  description = "AWS Region"
-  default     = "ap-southeast-1" 
+variable "subnetaz2" {
+  type = "map"
 }
