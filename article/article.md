@@ -1,12 +1,12 @@
 In this article I'm going to show you how to create a resilient Consul cluster, using Terraform and AWS. We can use this cluster for microservice discovery and management. No prior knowledge of the technologies or patterns is required!
 
-The final code is at [github.com/dwmkerr/terraform-consul-cluster](https://github.com/dwmkerr/terraform-consul-cluster).
+The final code is at [github.com/dwmkerr/terraform-consul-cluster](https://github.com/dwmkerr/terraform-consul-cluster). Note that it has evolved somewhat since the time of writing, see the Appendices at the end of the article for details.
 
 ## Consul, Terraform & AWS
 
 [Consul](https://www.consul.io/) is a technology which enables *Service Discovery*[^1], a pattern which allows services to locate each other via a central authority.
 
-[Terraform](https://www.terraform.io/) is a technology which allows us to script the provisioning of infrastructure and systems. This allows us to practice the *Infrastructure as Code* pattern. The rigour of code control (versioning, history, user access control, diffs, pull requests etc) can be applied to our systems. 
+[Terraform](https://www.terraform.io/) is a technology which allows us to script the provisioning of infrastructure and systems. This allows us to practice the *Infrastructure as Code* pattern. The rigour of code control (versioning, history, user access control, diffs, pull requests etc) can be applied to our systems.
 
 And why [AWS](https://aws.amazon.com/)? We need to create many servers and build a network to see this system in action. We can simulate parts of this locally with tools such as [Vagrant](https://www.vagrantup.com/), but we can use the arguably most popular[^2] IaaS platfom for this job at essentially zero cost, and learn some valuable skills which are readily applicable to other projects at the same time.
 
@@ -76,8 +76,8 @@ provider "aws" {
 resource "aws_vpc" "consul-cluster" {
   cidr_block = "10.0.0.0/16" // i.e. 10.0.0.0 to 10.0.255.255
   enable_dns_hostnames = true
-  tags { 
-    Name = "Consul Cluster VPC" 
+  tags {
+    Name = "Consul Cluster VPC"
     Project = "consul-cluster"
   }
 }
@@ -89,7 +89,7 @@ This script uses [Terraform Variables](https://www.terraform.io/docs/configurati
 terraform apply
 ```
 
-After supplying the values for the variables, Terraform will provision the network, using the AWS SDK internally. 
+After supplying the values for the variables, Terraform will provision the network, using the AWS SDK internally.
 
 ![](/content/images/2017/01/img-2-terraform-apply.png)
 
@@ -97,7 +97,7 @@ You'll see lots of info about what it is creating, then a success message.
 
 ### The Public Subnet
 
-You don't put hosts directly into a VPC, they need to go into a structure called a 'subnet', which is a *part* of a VPC. Subnets get their own subset of the VPC's available IP addresses, which you specify. 
+You don't put hosts directly into a VPC, they need to go into a structure called a 'subnet', which is a *part* of a VPC. Subnets get their own subset of the VPC's available IP addresses, which you specify.
 
 Subnets are used to build *zones* in a network. Why would you need this? Typically it is to manage security. You might have a 'public zone' in which all hosts can be accessed from the internet, and a 'private zone' which is inaccessible directly (and therefore a better location for hosts with sensitive data). You might have an 'operator' zone, which only sysadmins can access, but they can use to get diagnostic information.
 
@@ -234,7 +234,7 @@ Here's a breakdown of what we're doing:
 2. Get our IP address. AWS provide a magic address (169.254.169.254) which lets you query data about your instance, see [Instance Metadata & User Metadata](http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html)
 2. Run the Consul docker image in server mode, with the UI enabled, expecting only one instance
 
-**The actual scripts contains more!** Getting userdata scripts right, testing and debugging them is tricky. See how I do it in detail in [Appendix 1: Logging](#Appendix-1-Logging). 
+**The actual scripts contains more!** Getting userdata scripts right, testing and debugging them is tricky. See how I do it in detail in [Appendix 1: Logging](#Appendix-1-Logging).
 
 Now we need to tell Terraform to include this script as part of the instance metadata. Here's how we do that:
 
@@ -253,7 +253,7 @@ We can install a load balancer in front of our auto-scaling group, to automatica
 resource "aws_elb" "consul-lb" {
     name = "consul-lb-a"
     security_groups = [
-        "${aws_security_group.consul-cluster-vpc.id}", 
+        "${aws_security_group.consul-cluster-vpc.id}",
         "${aws_security_group.web.id}"
     ]
     subnets = [
@@ -372,7 +372,7 @@ while COUNT=$(cluster-instance-ids | wc -l) && [ "$COUNT" -lt "$EXPECTED_SIZE" ]
 do
     echo "$COUNT instances in the cluster, waiting for $EXPECTED_SIZE instances to warm up..."
     sleep 1
-done 
+done
 
 # Get my IP address, all IPs in the cluster, then just the 'other' IPs...
 IP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
@@ -497,7 +497,7 @@ On a new EC2 instance, running in either subnet, with the same roles as the Cons
 ```
 # Install Docker
 sudo su
-yum update -y 
+yum update -y
 yum install -y docker
 service docker start
 
@@ -608,6 +608,10 @@ If you want more details, let me know, or just check the code. I would heartily 
 ![Screenshot showing logs](/content/images/2017/01/img-19-cloudwatch-1.png)
 
 Being able to diagnose issues like this is vital when working with distributed systems which may be generating many log files.
+
+## Appendix 2: Modularisaton
+
+I got some a great PR from [arehmandev](https://github.com/arehmandev) which modularises the code. This makes it more reusable and cleans up the structure significantly. If you want to see the before/after, check the original PR at https://github.com/dwmkerr/terraform-consul-cluster/pull/4.
 
 ---
 
