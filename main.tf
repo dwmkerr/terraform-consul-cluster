@@ -1,13 +1,12 @@
 //  Setup the core provider information.
 provider "aws" {
-  region  = "${var.adminregion}"
-  profile = "${var.adminprofile}"
+  region  = "${var.region}"
 }
 
-# Create the consul-cluster, based on our consul module.
+//  Create the consul-cluster, based on our consul module.
 module "consul-cluster" {
   source          = "./modules/consul"
-  adminregion     = "${var.adminregion}"
+  region          = "${var.region}"
   amisize         = "t2.micro"
   min_size        = "5"
   max_size        = "5"
@@ -19,4 +18,9 @@ module "consul-cluster" {
   key_name        = "consul-cluster"
   public_key_path = "${var.public_key_path}"
   asgname         = "consul-asg"
+}
+
+//  We'll also show the DNS to the consul cluster.
+output "consul-dns" {
+  value = "${module.consul-cluster.consul-dns}"
 }
