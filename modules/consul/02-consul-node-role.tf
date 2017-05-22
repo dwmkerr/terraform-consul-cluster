@@ -92,5 +92,5 @@ resource "aws_iam_policy_attachment" "consul-instance-leader-discovery" {
 //  Create a instance profile for the role.
 resource "aws_iam_instance_profile" "consul-instance-profile" {
   name  = "consul-instance-profile"
-  roles = ["${aws_iam_role.consul-instance-role.name}"]
+  role = "${aws_iam_role.consul-instance-role.name}"
 }

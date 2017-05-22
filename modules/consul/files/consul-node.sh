@@ -77,14 +77,14 @@ done
 # Get my IP address, all IPs in the cluster, then just the 'other' IPs...
 IP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
 mapfile -t ALL_IPS < <(cluster-ips)
-OTHER_IPS=( $${ALL_IPS[@]/${IP}/} )
+OTHER_IPS=( $${ALL_IPS[@]/$${IP}/} )
 echo "Instance IP is: $IP, Cluster IPs are: $${ALL_IPS[@]}, Other IPs are: $${OTHER_IPS[@]}"
 
 # Start the Consul server.
 docker run -d --net=host \
     --name=consul \
     consul agent -server -ui \
-    -bind="$IP" \
+    -bind="$$IP" \
     -client="0.0.0.0" \
     -retry-join="$${OTHER_IPS[0]}" -retry-join="$${OTHER_IPS[1]}" \
     -retry-join="$${OTHER_IPS[2]}" -retry-join="$${OTHER_IPS[3]}" \
