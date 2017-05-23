@@ -9,9 +9,22 @@ exec > /var/log/user-data.log 2>&1
 # TODO: actually, userdata scripts run as root, so we can get
 # rid of the sudo and tee...
 
+# A few variables we will refer to later...
+ASG_NAME="${asgname}"
+REGION="${region}"
+EXPECTED_SIZE="${size}"
+
 # Update the packages, install CloudWatch tools.
 sudo yum update -y
 sudo yum install -y awslogs
+
+# Create a config file for awslogs to push logs to the same region of the cluster.
+cat <<- EOF | sudo tee /etc/awslogs/awscli.conf
+[plugins]
+cwlogs = cwlogs
+[default]
+region = ${region}
+EOF
 
 # Create a config file for awslogs to log our user-data log.
 cat <<- EOF | sudo tee /etc/awslogs/config/user-data.conf
@@ -40,11 +53,6 @@ yum install -y docker
 usermod -a -G docker ec2-user
 service docker start
 chkconfig docker on
-
-# A few variables we will refer to later...
-ASG_NAME="${asgname}"
-REGION="${region}"
-EXPECTED_SIZE="${size}"
 
 # Return the id of each instance in the cluster.
 function cluster-instance-ids {
