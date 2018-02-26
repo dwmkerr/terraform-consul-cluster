@@ -28,6 +28,9 @@ This will keep your AWS credentials in the `$HOME/.aws/credentials` file, which 
 The cluster is implemented as a [Terraform Module](https://www.terraform.io/docs/modules/index.html). To launch, just run:
 
 ```bash
+# Initialize terraform first time using
+terraform init
+
 # Create the module.
 terraform get
 
