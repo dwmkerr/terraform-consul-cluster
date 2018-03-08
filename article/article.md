@@ -16,7 +16,7 @@ A lot of what we will learn is not really AWS specific - and the Infrastructure 
 
 The goal is to create a system like this:
 
-![Overall System Diagram](/content/images/2017/01/img-0-goal.png)
+![Overall System Diagram](img-0-goal.png)
 
 In a nutshell:
 
@@ -39,7 +39,7 @@ The first logical step is to create the network itself. This means:
 
 All together, that's this:
 
-![](/content/images/2017/01/img-1-network.png)
+![](img-1-network.png)
 
 Our solution will be made more resilient by ensuring we host our Consul nodes across multiple *availability zones*[^3]
 
@@ -53,7 +53,7 @@ A private network is probably something you regularly use if you work in a compa
 
 Perhaps the most immediately obvious part of a VPC is that *you control the IP addresses*. You specify the *range* of IP addresses which are available to give to machines on the network. When a machine joins, it is given an IP in that range. I'm not going to go into too much detail here, if you are interested let me know and I'll write up an article on VPCs in detail!
 
-![](/content/images/2017/01/img-3-vpc.png)
+![](img-3-vpc.png)
 
 Here's how I'd suggest scripting AWS infrastructure with Terraform if you haven't done this before.
 
@@ -91,7 +91,7 @@ terraform apply
 
 After supplying the values for the variables, Terraform will provision the network, using the AWS SDK internally.
 
-![](/content/images/2017/01/img-2-terraform-apply.png)
+![](img-2-terraform-apply.png)
 
 You'll see lots of info about what it is creating, then a success message.
 
@@ -103,7 +103,7 @@ Subnets are used to build *zones* in a network. Why would you need this? Typical
 
 Here's a common subnet layout for multi-tiered applications:
 
-![](/content/images/2017/01/img-4-subnets.png)
+![](img-4-subnets.png)
 
 The defining characteristics of zones is that they are used to create *boundaries* to isolate hosts. These boundaries are normally secured by firewalls, traversed via gateways or NATs etc. We're going to create two public subnets, one in each of the availability zones[^5]:
 
@@ -132,7 +132,7 @@ The final parts of the network you can see in the [./infrastructure/network.tf](
 
 That's it for the network, we now have the following structure:
 
-![](/content/images/2017/01/img-1-network-1.png)
+![](img-1-network-1.png)
 
 If you want to see the code as it stands now, check the [Step 1](https://github.com/dwmkerr/terraform-consul-cluster/tree/step-1) branch. Now we need to look at creating the hosts to install Consul on.
 
@@ -151,7 +151,7 @@ So we now need to create:
 
 Or visually:
 
-![Basic Cluster Diagram](/content/images/2017/01/img-5-cluster-basic-2.png)
+![Basic Cluster Diagram](img-5-cluster-basic-2.png)
 
 Let's get to it.
 
@@ -196,11 +196,11 @@ A few key things to note:
 
 Once we run `terraform apply`, we'll see our auto-scaling group, which references the new launch configuration and works over multiple availability zones:
 
-![Auto scaling group and launch configuration](/content/images/2017/01/img-6-lc-asg.png)
+![Auto scaling group and launch configuration](img-6-lc-asg.png)
 
 We can also see the new instances:
 
-![Instances](/content/images/2017/01/img-7-instances.png)
+![Instances](img-7-instances.png)
 
 These instances don't do much yet though, we've not installed Docker or Consul.
 
@@ -293,11 +293,11 @@ output "consul-dns" {
 
 When we finally run `terraform apply`, we see the public DNS of our load balancer:
 
-![Screenshot showing 'terraform apply' output, indicating our newly generated ELB's public DNS](/content/images/2017/01/img-8-cluster-dns.png)
+![Screenshot showing 'terraform apply' output, indicating our newly generated ELB's public DNS](img-8-cluster-dns.png)
 
 And running in a browser on port 8500 we see the Consul admin interface:
 
-![Screenshot showing the Consul admin interface](/content/images/2017/01/img-9-admin-ui.png)
+![Screenshot showing the Consul admin interface](img-9-admin-ui.png)
 
 Every time we refresh we will likely see a different node. We've actually created five clusters each of one node - what we now need to do is connect them all together into a single cluster of five nodes.
 
@@ -331,7 +331,7 @@ The challenge is how do we get the IP of node 1? The IP addresses are determined
 
 There's a nice trick we can use here. We can ask AWS to give us the IP addresses of each host in the auto-scaling group. If we tell each node the addresses of the *other nodes*, then they will elect a leader themselves[^14].
 
-![Diagram showing how we decide on a leader IP](/content/images/2017/01/img-12-choose-leader-1.png)
+![Diagram showing how we decide on a leader IP](img-12-choose-leader-1.png)
 
 There are a couple of things we need to do to get this right. First, update the userdata script to provide the IPs of other nodes when we're starting up, then update the **role** of our nodes so that they have permissions to use the APIs we're going to call.
 
@@ -482,7 +482,7 @@ resource "aws_launch_configuration" "consul-cluster-lc" {
 
 Let's create the cluster again, with `terraform apply`. When we log into the UI we should now see a cluster containing all five nodes:
 
-![Screenshot of the Consul UI, showing that the Consul server is running on five nodes in the Datacenter](/content/images/2017/01/img-13-cluster.png)
+![Screenshot of the Consul UI, showing that the Consul server is running on five nodes in the Datacenter](img-13-cluster.png)
 
 This code is all in the [Step 3](https://github.com/dwmkerr/terraform-consul-cluster/tree/step-3) branch.
 
@@ -539,13 +539,13 @@ What's going on here?
 
 Now we can check the Consul UI:
 
-![The Consul UI showing a new service](/content/images/2017/01/img-15-sample-service.png)
+![The Consul UI showing a new service](img-15-sample-service.png)
 
 And there we have it. Our new node joins the cluster (as a client), we can register a new service with Consul.
 
 We can call this service from any node in the subnet, seeing output like the below:
 
-![Screenshot of the Zapp service](/content/images/2017/01/img-x-zapp.png)
+![Screenshot of the Zapp service](img-x-zapp.png)
 
 In this example, I used a DNS SRV query to ask where the `zapp-service` is, was told it was at `10.0.2.158` on port `5000`, then called the service, receiving a response. I can discover any service using this method, from any node. As services are added, removed, moved etc, I can ask Consul for accurate information on where to find them.
 
@@ -559,21 +559,21 @@ According to the [Deployment Table](https://www.consul.io/docs/internals/consens
 
 The easiest way to test this is to simply manually kill two nodes:
 
-![Screenshot showing two AWS instances being terminated](/content/images/2017/01/img-16-terminate.png)
+![Screenshot showing two AWS instances being terminated](img-16-terminate.png)
 
 If we pick two random nodes, as above, and terminate them, we see the cluster determines that we have two failed nodes but will still function (if one was the leader, a new leader will be automatically elected):
 
-![Screenshot showing the cluster highlighting two failed nodes](/content/images/2017/01/img-17-node-failure.png)
+![Screenshot showing the cluster highlighting two failed nodes](img-17-node-failure.png)
 
 What's nice about this setup is that no manual action is needed to recover. Our load balancer will notice the nodes are unhealthy and stop forwarding traffic. Our auto-scaling group will see the nodes have terminated and create two new ones, which will join the cluster in the same way as the original nodes. Once they join, the load balancer will find them healthy and bring them back into rotation.
 
 We can see from the load balancer monitoring that it notices we have unhealthy nodes and also notices when new ones come into service:
 
-![Screenshot showing the load balancer monitoring](/content/images/2017/01/img-18-recovery-1.png)
+![Screenshot showing the load balancer monitoring](img-18-recovery-1.png)
 
 A quick check of the admin dashboard shows we now have a recovered system, with five healthy nodes:
 
-![Screenshot showing recovered system](/content/images/2017/01/img-18b-recovered.png)
+![Screenshot showing recovered system](img-18b-recovered.png)
 
 The nodes which were terminated are still listed as failing. After 72 hours Consul will stop trying to periodically reconnect to these nodes and completely remove them[^16].
 
@@ -605,7 +605,7 @@ I've included CloudWatch logging in the code. In this write-up I've omitted this
 
 If you want more details, let me know, or just check the code. I would heartily recommend setting up logging like this for all but the most straightforward projects:
 
-![Screenshot showing logs](/content/images/2017/01/img-19-cloudwatch-1.png)
+![Screenshot showing logs](img-19-cloudwatch-1.png)
 
 Being able to diagnose issues like this is vital when working with distributed systems which may be generating many log files.
 
