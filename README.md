@@ -1,5 +1,7 @@
 # terraform-consul-cluster
 
+[![GuardRails badge](https://badges.production.guardrails.io/dwmkerr/terraform-consul-cluster.svg)](https://www.guardrails.io)
+
 This repo demonstrates how to create a resilient Consul cluster running on AWS, using Terraform. It is the companion project to my article '[Creating a Resilient Consul Cluster for Docker Microservice Discovery with Terraform and AWS](http://www.dwmkerr.com/creating-a-resilient-consul-cluster-for-docker-microservice-discovery-with-terraform-and-aws/)'.
 
 ## Prerequisites
